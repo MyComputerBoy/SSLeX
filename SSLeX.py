@@ -125,32 +125,24 @@ class SSLeX():
 
 	def SaveIntermediateImage(
 			self: Self,
-			IntermediateImageChannel0: "NDArray",
-			IntermediateImageChannel1: "NDArray",
-			IntermediateImageChannel2: "NDArray",
+			IntermediateImage: "NDArray",
 		) -> bool:
 		
 		lgn.info("Saving Intermediate image, batch number %s" % (self.IndexOfWorkingBatch))
 
-		RedChannelIntermediateImage = Image.new("F", self.WorkingImageSize)
-		GreenChannelIntermediateImage = Image.new("F", self.WorkingImageSize)
-		BlueChannelIntermediateImage = Image.new("F", self.WorkingImageSize)
+		IntermediateImages = [Image.new("F", self.WorkingImageSize) for _ in range(self.ChannelsPerPixel)]
 
-		RedChannelIntermediateImage.putdata(IntermediateImageChannel0.flatten())
-		GreenChannelIntermediateImage.putdata(IntermediateImageChannel1.flatten())
-		BlueChannelIntermediateImage.putdata(IntermediateImageChannel2.flatten())
+		for ChannelIndex in range(self.ChannelsPerPixel):
+			IntermediateImages[ChannelIndex].putdata(IntermediateImage[ChannelIndex].flatten())
 
 		#Save intermediate images in seperate images for full float precision
 		lgn.debug("Splitting image to each channel for ssaving in full quality.")
 
 		lgn.debug("Saving:")
 		lgn.debug(self.PathToIntermediateImages + "IntermediateRedChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
-		lgn.debug(self.PathToIntermediateImages + "IntermediateGreenChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
-		lgn.debug(self.PathToIntermediateImages + "IntermediateBlueChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
 
-		RedChannelIntermediateImage.save(self.PathToIntermediateImages + "IntermediateRedChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
-		GreenChannelIntermediateImage.save(self.PathToIntermediateImages + "IntermediateGreenChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
-		BlueChannelIntermediateImage.save(self.PathToIntermediateImages + "IntermediateBlueChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
+		for ChannelIndex in range(self.ChannelsPerPixel):
+			IntermediateImages[ChannelIndex].save(self.PathToIntermediateImages + "Intermediate%sChannel/%sBatch%s.tiff" % (ChannelIndex, self.Name, self.IndexOfWorkingBatch))
 
 		lgn.info("Saved to disk")
 
@@ -219,19 +211,16 @@ class SSLeX():
 		LastTime = time.time()
 		LastDelta: float = 0
 		
-		IntermediateImageArrayChannel0 = numpy.zeros((self.WorkingImageSize[0], self.WorkingImageSize[1]), dtype=numpy.uint64)
-		IntermediateImageArrayChannel1 = numpy.zeros((self.WorkingImageSize[0], self.WorkingImageSize[1]), dtype=numpy.uint64)
-		IntermediateImageArrayChannel2 = numpy.zeros((self.WorkingImageSize[0], self.WorkingImageSize[1]), dtype=numpy.uint64)
+		IntermediateImageArray = numpy.zeros(shape=[self.ChannelsPerPixel, self.WorkingImageSize[0], self.WorkingImageSize[1]], dtype=numpy.float64)
 
 		lgn.debug("Entering Main Stacking Loop <3")
 		for x in range(self.WorkingImageSize[0]):
 			for y in range(self.WorkingImageSize[1]):
-				PixelIndex: int = self.WorkingImageSize[0]*y+x
+				PixelIndex: int = self.WorkingImageSize[1]*x+y
 				for ImageIndex in range(self.BatchSize):
-					#Gamma corrected average of images m.sqrt((Imaged1 ** 2 + Image2 ** 2)/2)
-					IntermediateImageArrayChannel0[tuple([y, x])] += (self.LoadedImages[ImageIndex][PixelIndex][0] ** 2)/self.BatchSize
-					IntermediateImageArrayChannel1[tuple([y, x])] += (self.LoadedImages[ImageIndex][PixelIndex][1] ** 2)/self.BatchSize
-					IntermediateImageArrayChannel2[tuple([y, x])] += (self.LoadedImages[ImageIndex][PixelIndex][2] ** 2)/self.BatchSize
+					for ChannelIndex in range(self.ChannelsPerPixel):
+						#Gamma corrected average of images m.sqrt((Imaged1 ** 2 + Image2 ** 2)/2)
+						IntermediateImageArray[tuple([ChannelIndex, x, y])] += (self.LoadedImages[ImageIndex][PixelIndex][ChannelIndex] ** 2)/self.BatchSize
 
 			#Make time estimation cleaner
 			if 100*x/self.WorkingImageSize[0] >= PercentageTracker:
@@ -258,21 +247,16 @@ class SSLeX():
 		
 		#Correct for gamma
 		lgn.debug("Correcting for gamma")
-		GammaCorrectedArrayChannel0 = numpy.sqrt(IntermediateImageArrayChannel0)
-		GammaCorrectedArrayChannel1 = numpy.sqrt(IntermediateImageArrayChannel1)
-		GammaCorrectedArrayChannel2 = numpy.sqrt(IntermediateImageArrayChannel2)
-
-		DebugImage = Image.fromarray(GammaCorrectedArrayChannel0, "F")
+		GammaCorrectedArray = numpy.sqrt(IntermediateImageArray)
 
 		#Normalising image, because dng images values goes from 0 to 2**10, whilst tiff requires from 0 to 1
 		for x in range(self.WorkingImageSize[0]):
 			for y in range(self.WorkingImageSize[1]):
-				GammaCorrectedArrayChannel0[tuple([x, y])] = GammaCorrectedArrayChannel0[tuple([x, y])]/NormalisationFactor
-				GammaCorrectedArrayChannel1[tuple([x, y])] = GammaCorrectedArrayChannel1[tuple([x, y])]/NormalisationFactor
-				GammaCorrectedArrayChannel2[tuple([x, y])] = GammaCorrectedArrayChannel2[tuple([x, y])]/NormalisationFactor
+				for ChannelIndex in range(self.ChannelsPerPixel):
+					GammaCorrectedArray[tuple([ChannelIndex, x, y])] = GammaCorrectedArray[tuple([ChannelIndex, x, y])]/NormalisationFactor
 
 		lgn.debug("Stacked, now saving intermediate image")
-		SavedImage: bool = self.SaveIntermediateImage(GammaCorrectedArrayChannel0, GammaCorrectedArrayChannel1, GammaCorrectedArrayChannel2)
+		SavedImage: bool = self.SaveIntermediateImage(GammaCorrectedArray)
 		if not SavedImage:
 			return False
 		
@@ -303,7 +287,7 @@ class SSLeX():
 
 		for i in range(StartingIndex, EndingIndex):
 			self.IndexOfWorkingBatch = i
-			DidStackingOnBatch: bool = self.StackBatchOfImages(self.PathToWorkingImages)
+			DidStackingOnBatch: bool = self.StackBatchOfImages(self.PathToIntermediateImages)
 			if not DidStackingOnBatch:
 				raise Exception
 
