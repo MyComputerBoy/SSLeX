@@ -1,4 +1,5 @@
 """SSLeX.py -> Stacked Super Long Exposured Images
+Refactoring branch
 Main user classes:
 
 SSLeX(NameOfImages) -> Main class of Stacked Super Long eXposured images, NameOfImages is to differentiate between different SSLeX intermediate images
@@ -19,6 +20,7 @@ import time
 import struct
 import logging as lgn			#Logging for custom exceptions
 from enum import Enum
+import gc
 
 sys.path.insert(0, "C:/Users/Kim Chemnitz/Documents/GitHub/Hash/")
 import MCGRandom as Random
@@ -66,22 +68,33 @@ class SSLeX():
 
 		self.ListOfImagePaths: list[str] = []
 		self.ListOfWorkingImages: list[str] = []
+		self._BaselineWorkingImagesPath_: str = ""
 		self.PathToWorkingImages: str = ""
 		self.PathToIntermediateImages: str = ""
 
 		self.BatchSize: int = 8
+		self.IntermediateIndex: int = 0
 		self.IndexOfWorkingBatch: int = 0
 
 		self.DoStackingMultipleBatches: bool = False
+		self.DoStackingIntermediateImages: bool = False
+
 		self.StartingIndexForBatches: int = 0
 		self.EndingIndexForBatches: int = 0
 
 		self.Name = NameOfImages
 
 		self.WorkingImageSize: list[int] = [8160,6120]	#For 50MP RAW images
-		self.ChannelsPerPixel: int = 3
+		self.BaselineChannelsPerPixel: int = 3
+		self.WorkingChannelsPerPixel: int = 3
 
 		self.LoadedImages: list[list[list[int]]] = []
+
+		self._PercentageTracker_: int = 0
+		self._LastTime_: float = 0
+		self._LastDelta_: float = 0
+
+		self.VerboseDebugging: bool = False
 	
 	def AddImagesToWorkingList(
 			self: Self, 
@@ -99,13 +112,13 @@ class SSLeX():
 
 		CheckingImage = self.ListOfWorkingImages[0].split(".")[1].lower()
 
-		if CheckingImage == "tif" or CheckingImage == "png":
+		if CheckingImage == "tif" or CheckingImage == "png" or CheckingImage == "tiff":
 			for ImageToLoad in self.ListOfWorkingImages:
 				with Image.open(self.PathToWorkingImages + ImageToLoad) as LoadedImage:
 					self.LoadedImages.append(list(LoadedImage.getdata()))
 		elif CheckingImage == "intermediate":
 			for ImageToLoad in self.ListOfWorkingImages:
-				DidLoadImage = self.LoadIntermediateImage(self.PathToWorkingImages, ImageToLoad, self.WorkingImageSize, self.ChannelsPerPixel)
+				DidLoadImage = self.LoadIntermediateImage(self.PathToWorkingImages, ImageToLoad, self.WorkingImageSize, self.WorkingChannelsPerPixel)
 				if not DidLoadImage:
 					raise Exception
 		else:
@@ -130,19 +143,23 @@ class SSLeX():
 		
 		lgn.info("Saving Intermediate image, batch number %s" % (self.IndexOfWorkingBatch))
 
-		IntermediateImages = [Image.new("F", self.WorkingImageSize) for _ in range(self.ChannelsPerPixel)]
+		IntermediateImages = [Image.new("F", self.WorkingImageSize) for _ in range(self.WorkingChannelsPerPixel)]
 
-		for ChannelIndex in range(self.ChannelsPerPixel):
-			IntermediateImages[ChannelIndex].putdata(IntermediateImage[ChannelIndex].flatten())
+		if self.DoStackingIntermediateImages:
+			IntermediateImages[0].putdata(IntermediateImage.flatten())
+		else:
+			for ChannelIndex in range(self.WorkingChannelsPerPixel):
+				IntermediateImages[ChannelIndex].putdata(IntermediateImage[ChannelIndex].flatten())
 
 		#Save intermediate images in seperate images for full float precision
 		lgn.debug("Splitting image to each channel for ssaving in full quality.")
 
-		lgn.debug("Saving:")
-		lgn.debug(self.PathToIntermediateImages + "IntermediateRedChannel/%sBatch%s.tiff" % (self.Name, self.IndexOfWorkingBatch))
-
-		for ChannelIndex in range(self.ChannelsPerPixel):
-			IntermediateImages[ChannelIndex].save(self.PathToIntermediateImages + "Intermediate%sChannel/%sBatch%s.tiff" % (ChannelIndex, self.Name, self.IndexOfWorkingBatch))
+		if self.DoStackingIntermediateImages:
+			for ChannelIndex in range(self.WorkingChannelsPerPixel):
+				IntermediateImages[ChannelIndex].save(self.PathToIntermediateImages + "Intermediate%sChannel/%sBatch%s.tiff" % (self.IntermediateIndex, self.Name, self.IndexOfWorkingBatch))
+		else:
+			for ChannelIndex in range(self.WorkingChannelsPerPixel):
+				IntermediateImages[ChannelIndex].save(self.PathToIntermediateImages + "Intermediate%sChannel/%sBatch%s.tiff" % (ChannelIndex, self.Name, self.IndexOfWorkingBatch))
 
 		lgn.info("Saved to disk")
 
@@ -183,12 +200,19 @@ class SSLeX():
 			PathToIntermediateImages: str
 		) -> bool:
 
+		#Collect garbage
+		gc.collect()
+		self._PercentageTracker_ = 0
+
 		self.PathToIntermediateImages = PathToIntermediateImages
 
 		lgn.info("Stacking batch %s" % (self.IndexOfWorkingBatch))
 
 		lgn.debug("Loading images to process to memory")
 
+		lgn.debug("ListOfImagePathsFiles: %s" % (self.ListOfImagePathsFiles))
+
+		self.ListOfWorkingImages = []
 		#Prepare list of images to stack
 		for i in range(self.BatchSize):
 			IndexOfImage: int = i + self.IndexOfWorkingBatch * self.BatchSize
@@ -198,62 +222,55 @@ class SSLeX():
 			)
 		
 		# Backup GetDimensions in case dimensions have changed
-		self.GetDimensions(
-			self.ListOfWorkingImages[0]
-		)
+		self.GetDimensions(self.ListOfWorkingImages[0])
 		
 		DidLoadedImages: bool = self.LoadImages()
 		if not DidLoadedImages:
 			lgn.error("Did not load imaged correctly.")
 			return False
 		
-		PercentageTracker: int = 0
-		LastTime = time.time()
-		LastDelta: float = 0
-		
-		IntermediateImageArray = numpy.zeros(shape=[self.ChannelsPerPixel, self.WorkingImageSize[0], self.WorkingImageSize[1]], dtype=numpy.float64)
+		self._LastTime_ = time.time()
+		self._LastDelta_ = 0
+
+		MaxPixelIndex = self.WorkingImageSize[0] * self.WorkingImageSize[1]
 
 		lgn.debug("Entering Main Stacking Loop <3")
-		for x in range(self.WorkingImageSize[0]):
-			for y in range(self.WorkingImageSize[1]):
-				PixelIndex: int = self.WorkingImageSize[1]*x+y
-				for ImageIndex in range(self.BatchSize):
-					for ChannelIndex in range(self.ChannelsPerPixel):
+
+		if self.DoStackingIntermediateImages:
+			IntermediateImageArray = numpy.zeros(shape=[self.WorkingImageSize[0], self.WorkingImageSize[1]], dtype=numpy.float64)
+			lgn.debug("Created Intermediate Image Array.")
+
+			for x in range(self.WorkingImageSize[0]):
+				for y in range(self.WorkingImageSize[1]):
+					PixelIndex: int = self.WorkingImageSize[1]*x+y
+					for ImageIndex in range(self.BatchSize):
 						#Gamma corrected average of images m.sqrt((Imaged1 ** 2 + Image2 ** 2)/2)
-						IntermediateImageArray[tuple([ChannelIndex, x, y])] += (self.LoadedImages[ImageIndex][PixelIndex][ChannelIndex] ** 2)/self.BatchSize
+						IntermediateImageArray[tuple([x, y])] += (self.LoadedImages[ImageIndex][PixelIndex] ** 2)/self.BatchSize
+					self.PrintPercentage(PixelIndex, MaxPixelIndex)
+		else:
+			IntermediateImageArray = numpy.zeros(shape=[self.WorkingChannelsPerPixel, self.WorkingImageSize[0], self.WorkingImageSize[1]], dtype=numpy.float64)
+			lgn.debug("Created Intermediate Image Array.")
 
-			#Make time estimation cleaner
-			if 100*x/self.WorkingImageSize[0] >= PercentageTracker:
-				NowTime = time.time()
-				NowDeltaTime: float = NowTime - LastTime
-				CleansedDelta: float = (NowDeltaTime + LastDelta)/2
+			for x in range(self.WorkingImageSize[0]):
+				for y in range(self.WorkingImageSize[1]):
+					PixelIndex: int = self.WorkingImageSize[1]*x+y
+					for ImageIndex in range(self.BatchSize):
+						for ChannelIndex in range(self.WorkingChannelsPerPixel):
+							#Gamma corrected average of images m.sqrt((Imaged1 ** 2 + Image2 ** 2)/2)
+							IntermediateImageArray[tuple([ChannelIndex, x, y])] += (self.LoadedImages[ImageIndex][PixelIndex][ChannelIndex] ** 2)/self.BatchSize
+					self.PrintPercentage(PixelIndex, MaxPixelIndex)
 
-				ThisBatchesEstimatedTime: float = CleansedDelta * (100-PercentageTracker)
-				FormattedEstimatedTime: str = FormatSecondsToString(ThisBatchesEstimatedTime)
-				
-				if PercentageTracker != 0:
-					if self.DoStackingMultipleBatches:
-						EstimatedTimeForRestOfBatches: float = 100*CleansedDelta*(self.EndingIndexForBatches-self.IndexOfWorkingBatch)
-						OverallEstimatedTime: float = ThisBatchesEstimatedTime + EstimatedTimeForRestOfBatches
-						FormattedEstimatedAllBatchesTime: str = FormatSecondsToString(OverallEstimatedTime)
-						lgn.info("%s%% done for this batch, estimated time: %s" % (PercentageTracker, FormattedEstimatedAllBatchesTime))
-					else:
-						lgn.info("%s%% done, estimated time for this batch: %s" % (PercentageTracker, FormattedEstimatedTime))
-
-
-				LastTime = NowTime
-				LastDelta = NowDeltaTime
-				PercentageTracker += 1
-		
 		#Correct for gamma
 		lgn.debug("Correcting for gamma")
 		GammaCorrectedArray = numpy.sqrt(IntermediateImageArray)
 
 		#Normalising image, because dng images values goes from 0 to 2**10, whilst tiff requires from 0 to 1
-		for x in range(self.WorkingImageSize[0]):
-			for y in range(self.WorkingImageSize[1]):
-				for ChannelIndex in range(self.ChannelsPerPixel):
-					GammaCorrectedArray[tuple([ChannelIndex, x, y])] = GammaCorrectedArray[tuple([ChannelIndex, x, y])]/NormalisationFactor
+		if not self.DoStackingIntermediateImages:
+			lgn.debug("Normalising image")
+			for x in range(self.WorkingImageSize[0]):
+				for y in range(self.WorkingImageSize[1]):
+					for ChannelIndex in range(self.WorkingChannelsPerPixel):
+						GammaCorrectedArray[tuple([ChannelIndex, x, y])] = GammaCorrectedArray[tuple([ChannelIndex, x, y])]/NormalisationFactor
 
 		lgn.debug("Stacked, now saving intermediate image")
 		SavedImage: bool = self.SaveIntermediateImage(GammaCorrectedArray)
@@ -262,8 +279,40 @@ class SSLeX():
 		
 		lgn.debug("Intermediate image saved.")
 
+		lgn.debug("Deleting LoadedImages")
+		self.LoadedImages = []
+		lgn.debug("Images deleted.")
+
 		return True
 	
+	def PrintPercentage(
+			self: Self,
+			IndexDone: int,
+			MaxIndex: int
+		) -> None:
+
+		#Make time estimation cleaner
+		if 100*IndexDone/MaxIndex >= self._PercentageTracker_:
+			NowTime = time.time()
+			NowDeltaTime: float = NowTime - self._LastTime_
+			CleansedDelta: float = (NowDeltaTime + self._LastDelta_)/2
+
+			ThisBatchesEstimatedTime: float = CleansedDelta * (100-self._PercentageTracker_ )
+			FormattedEstimatedTime: str = FormatSecondsToString(ThisBatchesEstimatedTime)
+			
+			if self._PercentageTracker_  != 0:
+				if self.DoStackingMultipleBatches:
+					EstimatedTimeForRestOfBatches: float = 100*CleansedDelta*(self.EndingIndexForBatches-self.IndexOfWorkingBatch)
+					OverallEstimatedTime: float = ThisBatchesEstimatedTime + EstimatedTimeForRestOfBatches
+					FormattedEstimatedAllBatchesTime: str = FormatSecondsToString(OverallEstimatedTime)
+					lgn.info("%s%% done for this batch, estimated time: %s" % (self._PercentageTracker_ , FormattedEstimatedAllBatchesTime))
+				else:
+					lgn.info("%s%% done, estimated time for this batch: %s" % (self._PercentageTracker_ , FormattedEstimatedTime))
+	
+			self._LastTime_ = NowTime
+			self._LastDelta_ = NowDeltaTime
+			self._PercentageTracker_ += 1
+
 	def StackAmountOfBatches(
 			self: Self, 
 			PathToSourceImages: str,
@@ -271,6 +320,8 @@ class SSLeX():
 			EndingIndex: int, 
 			StartingIndex: int = 0
 		) -> bool:
+
+		gc.collect()
 
 		self.PathToWorkingImages = PathToSourceImages
 		self.PathToIntermediateImages = PathToIntermediateImages
@@ -292,6 +343,35 @@ class SSLeX():
 				raise Exception
 
 		lgn.info("Finished stacking batches of images.")
+
+		return True
+	
+	def StackIntermediateImages(
+			self: Self,
+			PathToSourceImages: str,
+			PathToIntermediateImages: str,
+			EndingIndex: int,
+			StartingIndex: int = 0
+		) -> bool:
+		
+		self._BaselineWorkingImagesPath_ = PathToSourceImages
+		self.DoStackingIntermediateImages = True
+
+		self.BaselineChannelsPerPixel = 3
+		self.WorkingChannelsPerPixel = 1
+		for ChannelIndex in range(self.BaselineChannelsPerPixel):
+			lgn.debug("Stacking Channel %s" % (ChannelIndex))
+			self.IntermediateIndex = ChannelIndex
+			self.PathToWorkingImages = self._BaselineWorkingImagesPath_ + "Intermediate%sChannel" % (ChannelIndex)
+			DidStackingThisChannel: bool = self.StackAmountOfBatches(
+				PathToSourceImages + "Intermediate%sChannel/" % (ChannelIndex),
+				PathToIntermediateImages,
+				EndingIndex,
+				StartingIndex
+			)
+
+			if not DidStackingThisChannel:
+				raise Exception
 
 		return True
 
@@ -337,12 +417,14 @@ class FunctionsToCall(Enum):
 	CreateRandomisedImages = 1
 	StackActualImages = 2
 	StackTestImages = 3
-	LoadImages = 4
+	StackIntermediateImages = 4
+	LoadImages = 5
 
-FunctionToCall: "FunctionsToCall" = FunctionsToCall.StackActualImages
+FunctionToCall: "FunctionsToCall" = FunctionsToCall.StackIntermediateImages
 
 def __main__(vArgs: list[str] = []) -> bool:
 	global FunctionToCall
+	SSLeXHandler: "SSLeX" = SSLeX(vArgs[0])
 
 	ReturnValue: bool
 	if FunctionToCall == FunctionsToCall.DoNothing:
@@ -354,6 +436,8 @@ def __main__(vArgs: list[str] = []) -> bool:
 	elif FunctionToCall == FunctionsToCall.StackTestImages:
 		ReturnValue = StackTestImages(vArgs)
 		input()
+	elif FunctionToCall == FunctionsToCall.StackIntermediateImages:
+		ReturnValue = StackIntermediateImages(vArgs)
 	elif FunctionToCall == FunctionsToCall.LoadImages:
 		ReturnValue = LoadImages(vArgs)
 	else:
@@ -393,6 +477,27 @@ def StackActualImages(vArgs: list[str] = []) -> bool:
 		StartingIndex = 0
 
 	DidStack: bool = SSLeXHandler.StackAmountOfBatches(vArgs[1], vArgs[2], int(vArgs[3]), int(StartingIndex))
+
+	if not DidStack:
+		return False
+	
+	return True
+
+def StackIntermediateImages(vArgs: list[str] = []) -> bool:
+	if len(vArgs) < 4:
+		raise AttributeError("vArgs: list[str] requires [Name], [Path to source images], [Path to intermediate images], [Ending index], [Starting index]")
+
+	SSLeXHandler: "SSLeX" = SSLeX(vArgs[0])
+
+	try:
+		StartingIndex: int = int(vArgs[4])
+	except IndexError:
+		StartingIndex = 0
+	
+	SSLeXHandler.BatchSize = int(vArgs[5])
+
+	for ChannelIndex in range(SSLeXHandler.WorkingChannelsPerPixel):
+		DidStack: bool = SSLeXHandler.StackIntermediateImages(vArgs[1], vArgs[2], int(vArgs[3]), int(StartingIndex))
 
 	if not DidStack:
 		return False
