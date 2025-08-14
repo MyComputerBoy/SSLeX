@@ -2,49 +2,33 @@
 Refactoring branch
 Main user classes:
 
-SSLeX(NameOfImages) -> Main class of Stacked Super Long eXposured images, NameOfImages is to differentiate between different SSLeX intermediate images
+SSLeX(NameOfImages: str) -> Main class of Stacked Super Long eXposured images, NameOfImages is to differentiate between different SSLeX intermediate images
 	Main user functions:
 
 	AddImagesToWorkingList(PathsToImages) -> bool, Adds path to images to stack, the folder should be empty except the images you want to stack
 	StackAmountOfBatches(EndingIndex: int, StartingIndex: int = 0) -> bool, Stacks StartingIndex to EndingIndex batches
+	StackIntermediateImages(
+		self: Self,
+		PathToSourceImages: str,
+		PathToIntermediateImages: str,
+		EndingIndex: int,
+		StartingIndex: int = 0
+	) -> bool, Stacks Intermediate images from StartingIndex to EndingIndex of batches, just supply basefolder that contains all channel subfolders as source path
 """
 
 import math
 import os
-import sys
 from PIL import Image
-import scipy.misc
 import numpy
 from typing import Self
 import time
-import struct
 import logging as lgn			#Logging for custom exceptions
-from enum import Enum
 import gc
-
-sys.path.insert(0, "C:/Users/Kim Chemnitz/Documents/GitHub/Hash/")
-import MCGRandom as Random
-
-#Define some basic constants
-# Sizes: list[int] = [256, 256]
-Sizes: list[int] = [8160,6120]
-ChannelsPerPixel: int = 3
-
-IntermediateScalar: int = 2**20
-NormalisationFactor: int = 2**10
 
 #Initiating logging
 LOGLEVEL = lgn.INFO
 lgn.basicConfig(format="%(levelname)s: %(message)s", level=lgn.DEBUG)
 lgn.getLogger().setLevel(LOGLEVEL)
-
-RandomHandler = Random.MCGRandom()
-
-def ByteToChars(Input: int) -> str:
-	LowerChar = RandomHandler.ConvertableCharList[Input % 64]
-	HigherChar = RandomHandler.ConvertableCharList[math.floor(Input/64)]
-
-	return str(HigherChar + LowerChar)
 
 def FormatSecondsToString(InputSeconds: float) -> str:
 	Seconds = int(InputSeconds % 60)
@@ -54,11 +38,18 @@ def FormatSecondsToString(InputSeconds: float) -> str:
 	return "%sH%sM%sS" % (Hours, Minutes, Seconds)
 
 class SSLeX():
-	"""SSLeX(NameOfImages) -> Main class of Stacked Super Long eXposured images, NameOfImages is to differentiate between different SSLeX intermediate images
+	"""SSLeX(NameOfImages: str) -> Main class of Stacked Super Long eXposured images, NameOfImages is to differentiate between different SSLeX intermediate images
 	Main user functions:
 
 	AddImagesToWorkingList(PathsToImages) -> bool, Adds path to images to stack, the folder should be empty except the images you want to stack
 	StackAmountOfBatches(EndingIndex: int, StartingIndex: int = 0) -> bool, Stacks StartingIndex to EndingIndex batches
+	StackIntermediateImages(
+		self: Self,
+		PathToSourceImages: str,
+		PathToIntermediateImages: str,
+		EndingIndex: int,
+		StartingIndex: int = 0
+	) -> bool, Stacks Intermediate images from StartingIndex to EndingIndex of batches, just supply basefolder that contains all channel subfolders as source path
 	"""
 
 	def __init__(
@@ -66,12 +57,16 @@ class SSLeX():
 			NameOfImages: str,
 		):
 
+		self.Name = NameOfImages
+
+		#Definitions of different paths needed
 		self.ListOfImagePaths: list[str] = []
 		self.ListOfWorkingImages: list[str] = []
 		self._BaselineWorkingImagesPath_: str = ""
 		self.PathToWorkingImages: str = ""
 		self.PathToIntermediateImages: str = ""
 
+		#Definitions of some information about the working process
 		self.BatchSize: int = 8
 		self.IntermediateIndex: int = 0
 		self.IndexOfWorkingBatch: int = 0
@@ -82,14 +77,15 @@ class SSLeX():
 		self.StartingIndexForBatches: int = 0
 		self.EndingIndexForBatches: int = 0
 
-		self.Name = NameOfImages
-
 		self.WorkingImageSize: list[int] = [8160,6120]	#For 50MP RAW images
 		self.BaselineChannelsPerPixel: int = 3
 		self.WorkingChannelsPerPixel: int = 3
+		self.IntermediateScalar: float = 2**32
+		self.NormalisationFactor: float = 2**10
 
 		self.LoadedImages: list[list[list[int]]] = []
 
+		#Definitions of percentage tracking variables, for printing how long the process is along the stacking
 		self._PercentageTracker_: int = 0
 		self._LastTime_: float = 0
 		self._LastDelta_: float = 0
@@ -138,7 +134,7 @@ class SSLeX():
 
 	def SaveIntermediateImage(
 			self: Self,
-			IntermediateImage: "NDArray",
+			IntermediateImage: numpy.ndarray,
 		) -> bool:
 		
 		lgn.info("Saving Intermediate image, batch number %s" % (self.IndexOfWorkingBatch))
@@ -186,7 +182,7 @@ class SSLeX():
 			for y in range(Sizes[1]):
 				TemporaryPixel: list[int] = []
 				for ChannelIndex in range(ChannelsPerPixel):
-					TemporaryPixel.append(int(int(Values[ValueTracker])/IntermediateScalar))
+					TemporaryPixel.append(int(int(Values[ValueTracker])/self.IntermediateScalar))
 					ValueTracker += 1
 				TemporaryImage.putpixel([x,y], tuple(TemporaryPixel))
 
@@ -270,7 +266,7 @@ class SSLeX():
 			for x in range(self.WorkingImageSize[0]):
 				for y in range(self.WorkingImageSize[1]):
 					for ChannelIndex in range(self.WorkingChannelsPerPixel):
-						GammaCorrectedArray[tuple([ChannelIndex, x, y])] = GammaCorrectedArray[tuple([ChannelIndex, x, y])]/NormalisationFactor
+						GammaCorrectedArray[tuple([ChannelIndex, x, y])] = GammaCorrectedArray[tuple([ChannelIndex, x, y])]/self.NormalisationFactor
 
 		lgn.debug("Stacked, now saving intermediate image")
 		SavedImage: bool = self.SaveIntermediateImage(GammaCorrectedArray)
@@ -374,147 +370,3 @@ class SSLeX():
 				raise Exception
 
 		return True
-
-def CreateRandomisedImage(
-		OutputPath: str,
-		OutputName: str,
-		IndexOfImage: int,
-	):
-
-	global Seed
-
-	LocalRandomHandler = Random.MCGRandom()
-
-	Sizes: list[int] = [256,256]
-	ChannelsPerPixes: int = 3
-	MaxSubPixelValue: int = 2**8
-	MaxPixelIndex: int = Sizes[0] * Sizes[1]
-
-	TemporaryImage = numpy.zeros([Sizes[1], Sizes[0], ChannelsPerPixel], dtype=numpy.uint64)
-	for x in range(Sizes[0]):
-		for y in range(Sizes[1]):
-			for ChannelIndex in range(ChannelsPerPixes):
-				# RandomValue: int = RandomHandler.RandomInt(None, 0, MaxSubPixelValue)
-
-				PixelIndex = Sizes[1]*y + x
-				PixelPercentage = PixelIndex/MaxPixelIndex
-
-				TemporaryImage[x][y][ChannelIndex] = math.floor(256*PixelPercentage*IndexOfImage/8)
-
-	OutputImage = Image.new("RGB", Sizes)
-
-	for x in range(Sizes[0]):
-		for y in range(Sizes[1]):
-			TemporaryPixel = []
-			for ChannelIndex in range(ChannelsPerPixel):
-				TemporaryPixel.append(TemporaryImage[x][y][ChannelIndex])
-			OutputImage.putpixel([x,y], tuple(TemporaryPixel))
-
-	OutputImage.save(OutputPath + OutputName + ".png")
-
-class FunctionsToCall(Enum):
-	DoNothing = 0
-	CreateRandomisedImages = 1
-	StackActualImages = 2
-	StackTestImages = 3
-	StackIntermediateImages = 4
-	LoadImages = 5
-
-FunctionToCall: "FunctionsToCall" = FunctionsToCall.StackIntermediateImages
-
-def __main__(vArgs: list[str] = []) -> bool:
-	global FunctionToCall
-	SSLeXHandler: "SSLeX" = SSLeX(vArgs[0])
-
-	ReturnValue: bool
-	if FunctionToCall == FunctionsToCall.DoNothing:
-		ReturnValue= DoNothing(vArgs)
-	elif FunctionToCall == FunctionsToCall.CreateRandomisedImages:
-		ReturnValue = CreateRandomisedImages(vArgs)
-	elif FunctionToCall == FunctionsToCall.StackActualImages:
-		ReturnValue = StackActualImages(vArgs)
-	elif FunctionToCall == FunctionsToCall.StackTestImages:
-		ReturnValue = StackTestImages(vArgs)
-		input()
-	elif FunctionToCall == FunctionsToCall.StackIntermediateImages:
-		ReturnValue = StackIntermediateImages(vArgs)
-	elif FunctionToCall == FunctionsToCall.LoadImages:
-		ReturnValue = LoadImages(vArgs)
-	else:
-		raise ValueError("Incorrect value of FunctionToCall.")
-	
-	return ReturnValue
-
-#Load image
-def LoadImages(vArgs: list[str] = []) -> bool:
-	SSLeX.LoadIntermediateImage(SSLeX, "D:/Users/hatel/Pictures/SSLeXIntermediate/", "Intermediate.intermediate", Sizes, ChannelsPerPixel)
-
-	return True
-
-def DoNothing(vArgs: list[str]) -> bool:
-	return True
-
-#Create randomised images
-def CreateRandomisedImages(vArgs: list[str] = []) -> bool:
-	lgn.debug("Creating Randomised Images")
-	
-	for i in range(8):
-		CreateRandomisedImage("D:/Users/hatel/Pictures/SSLeXTest/", str(i), i)
-		lgn.debug("Created %sth image" % (i))
-	
-	return True
-
-#Normal stack
-def StackActualImages(vArgs: list[str] = []) -> bool:
-	if len(vArgs) < 4:
-		raise AttributeError("vArgs: list[str] requires [Name], [Path to source images], [Path to intermediate images], [Ending index], [Starting index]")
-
-	SSLeXHandler: "SSLeX" = SSLeX(vArgs[0])
-
-	try:
-		StartingIndex: int = int(vArgs[4])
-	except IndexError:
-		StartingIndex = 0
-
-	DidStack: bool = SSLeXHandler.StackAmountOfBatches(vArgs[1], vArgs[2], int(vArgs[3]), int(StartingIndex))
-
-	if not DidStack:
-		return False
-	
-	return True
-
-def StackIntermediateImages(vArgs: list[str] = []) -> bool:
-	if len(vArgs) < 4:
-		raise AttributeError("vArgs: list[str] requires [Name], [Path to source images], [Path to intermediate images], [Ending index], [Starting index]")
-
-	SSLeXHandler: "SSLeX" = SSLeX(vArgs[0])
-
-	try:
-		StartingIndex: int = int(vArgs[4])
-	except IndexError:
-		StartingIndex = 0
-	
-	SSLeXHandler.BatchSize = int(vArgs[5])
-
-	for ChannelIndex in range(SSLeXHandler.WorkingChannelsPerPixel):
-		DidStack: bool = SSLeXHandler.StackIntermediateImages(vArgs[1], vArgs[2], int(vArgs[3]), int(StartingIndex))
-
-	if not DidStack:
-		return False
-	
-	return True
-
-def StackTestImages(vArgs: list[str] = []) -> bool:
-	global NormalisationFactor
-	NormalisationFactor = 256
-
-	SSLeXHandler: "SSLeX" = SSLeX("TestImages")
-
-	SSLeXHandler.AddImagesToWorkingList("D:/Users/hatel/Pictures/SSLeXTest/")
-
-	DidStack: bool = SSLeXHandler.StackBatchOfImages("D:/Users/hatel/Pictures/SSLeXIntermediate/")
-
-	if not DidStack:
-		return False
-	
-	return True
