@@ -25,6 +25,7 @@ SSLeX(NameOfImages: str) -> Main class of Stacked Super Long eXposured images, N
 import math
 import os
 from PIL import Image
+import PIL
 import numpy
 from typing import Self
 import time
@@ -162,8 +163,11 @@ class SSLeX():
 			ImagePath: str
 		) -> bool:
 
-		with Image.open(self.PathToWorkingImages + ImagePath) as WorkingImage:
-			self.WorkingImageSize = WorkingImage.size
+		try:
+			with Image.open(self.PathToWorkingImages + ImagePath) as WorkingImage:
+				self.WorkingImageSize = WorkingImage.size
+		except PIL.UnidentifiedImageError:
+			raise Exception("Unsupported image format (PIL does not recognise the format)")
 		
 		return True
 
