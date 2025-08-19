@@ -44,13 +44,6 @@ def FormatSecondsToString(InputSeconds: float) -> str:
 
 	return "%sH %sM %sS" % (Hours, PadStringOnLeft(Minutes, 2), PadStringOnLeft(Seconds, 2))
 
-def PadNumber(InputNumber: int, TargetLength: int) -> str:
-	OutputString: str = str(InputNumber)
-	while len(OutputString) < TargetLength:
-		OutputString = "0" + OutputString
-	
-	return OutputString
-
 def PadStringOnLeft(InputString: str, TargetLength: int) -> str:
 	OutputString: str = str(InputString)
 	while len(OutputString) < TargetLength:
