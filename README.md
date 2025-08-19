@@ -3,7 +3,16 @@ Stacked Super Long Exposured Images
 A project for stacking multiple images for super high quality images from multiple images.
 (Still early in development)
 
-How to use SSLeX
+NOTE!!! The executable is not finished, the compiler could apparently not compile everything properly!!!!!!!
+NOTE!!! Using this project as a library is still possible, it is just not callable from the command line yet
+
+How to use SSLeX on the command-line
+
+1: Open the command line
+2: Navigate to the installed path with the executable
+3: run SSLeX with the relavent arguments (This will be elaborated on when the executable works properly)
+
+How to use SSLeX as a library
 
 SSLeX (Stacked Super Long eXposures) uses a class to store and work on everything, and to initiate a class you need to supply a name for the project as to differentiate on different projects as nescessary.
 
