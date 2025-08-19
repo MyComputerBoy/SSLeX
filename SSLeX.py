@@ -24,6 +24,7 @@ SSLeX(NameOfImages: str) -> Main class of Stacked Super Long eXposured images, N
 
 import math
 import os
+import sys
 from PIL import Image
 import PIL
 import numpy
@@ -33,7 +34,7 @@ import logging as lgn			#Logging for custom exceptions
 import gc
 
 #Initiating logging
-LOGLEVEL = lgn.DEBUG
+LOGLEVEL = lgn.INFO
 lgn.basicConfig(format="%(levelname)s: %(message)s", level=lgn.DEBUG)
 lgn.getLogger().setLevel(LOGLEVEL)
 
@@ -423,3 +424,28 @@ class SSLeX():
 				raise Exception
 
 		return True
+
+def __main__() -> int:
+	vArgs = sys.argv
+
+	if len(vArgs) < 6:
+		raise IndexError("SSLeX requires 3 arguments: [NameOfImages], [PathToSourceImages], [PathToIntermediateImages], [EndingIndex], [StartingIndex], [DoStackingIntermediateImages].")
+
+	ProjectName: str = vArgs[0]
+	PathToSourceImages: str = vArgs[1]
+	PathToIntermediateImages: str = vArgs[2]
+	EndingIndex: int = int(vArgs[3])
+	StartingIndex: int = int(vArgs[4])
+	DoStackingIntermediate: bool = bool(vArgs[5])
+
+	SSLeXHandler = SSLeX(ProjectName)
+
+	if DoStackingIntermediate:
+		SSLeXHandler.StackAmountOfBatches(PathToSourceImages, PathToIntermediateImages, EndingIndex, StartingIndex)
+	else:
+		SSLeXHandler.StackIntermediateImages(PathToIntermediateImages, PathToIntermediateImages, EndingIndex, StartingIndex)
+	
+	return 0
+
+if __name__ == "__main__":
+	__main__()
